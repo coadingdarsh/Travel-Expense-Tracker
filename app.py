@@ -19,8 +19,9 @@ from google.genai import types as genai_types
 from governance_gate import DEFAULT_POLICY, execute_action, governance_gate
 
 # Load API key from Streamlit secrets (Cloud) or environment variable (local)
-if "GOOGLE_API_KEY" in st.secrets:
-    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+api_key = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+if api_key:
+    os.environ["GOOGLE_API_KEY"] = api_key
 
 # ---------------------------------------------------------------------------
 # Page config
