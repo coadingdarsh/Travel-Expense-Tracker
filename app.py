@@ -25,6 +25,7 @@ from expense_pipeline import (
     generate_pretrip_briefing,
     parse_expense_request,
 )
+from external_apis import check_fare_reasonableness, get_weather_context
 
 # ---------------------------------------------------------------------------
 # Reliable, no-LLM-required direct pipeline
@@ -272,6 +273,15 @@ else:
             )
             if e["decision"] == "flagged":
                 st.caption(f"${e['over_by']:.2f} over the ${e['limit']:.2f} policy limit")
+                weather = get_weather_context(
+                    trip.get("destination", ""), str(date.today())
+                )
+                if weather["available"] and weather["summary"] != "Weather was unremarkable that day.":
+                    st.caption(f"🌦 {weather['summary']}")
+                if e["category"] == "transport" and e.get("context"):
+                    fare = check_fare_reasonableness("origin", "destination", e["amount"])
+                    if fare["available"]:
+                        st.caption(f"🚗 Fare check: {fare['verdict']}")
                 st.markdown('<div class="quote-card">', unsafe_allow_html=True)
                 st.markdown('<div class="quote-label">In your own words</div>', unsafe_allow_html=True)
                 st.write(e["justification"])
