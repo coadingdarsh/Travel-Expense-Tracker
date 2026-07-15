@@ -3,12 +3,14 @@ Trip Advocate — an expense tracker built to defend the traveler, not audit the
 Built on IBM watsonx.ai (meta-llama/llama-3-3-70b-instruct).
 
 Run with: streamlit run app.py
-Requires: pip install streamlit requests pandas
+Requires: pip install streamlit requests pandas plotly
 """
 
 from datetime import date
 
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 # Load IBM watsonx secrets from Streamlit Cloud if present
@@ -26,6 +28,24 @@ from expense_pipeline import (
     parse_expense_request,
 )
 from external_apis import check_fare_reasonableness, get_weather_context
+
+
+def compute_trust_score(expenses: list) -> int:
+    """A single 0-100 number summarizing the trip's overall standing —
+    the one visual number a judge remembers instead of a table of flags.
+
+    Starts at 100. Each flagged expense costs points proportional to how
+    far over policy it was, with diminishing severity so one bad dinner
+    doesn't tank an otherwise clean trip.
+    """
+    if not expenses:
+        return 100
+    score = 100.0
+    for e in expenses:
+        if e["decision"] == "flagged" and e["limit"]:
+            overage_ratio = min(e["over_by"] / e["limit"], 1.0)  # cap at 100% over
+            score -= 8 + (overage_ratio * 12)  # 8-20 point penalty per flag
+    return max(0, round(score))
 
 # ---------------------------------------------------------------------------
 # Reliable, no-LLM-required direct pipeline
@@ -77,35 +97,77 @@ st.set_page_config(page_title="Trip Advocate", page_icon="🧳", layout="centere
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background-color: #FAF9F6; }
-    h1, h2, h3 { color: #1B2430; font-weight: 700; }
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
+
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+        background: linear-gradient(160deg, #FBF9F4 0%, #F2F7F5 55%, #EDF5F2 100%) !important;
+    }
+
+    [data-testid="stAppViewContainer"] *,
+    [data-testid="stAppViewContainer"] p,
+    [data-testid="stAppViewContainer"] span,
+    [data-testid="stAppViewContainer"] label,
+    [data-testid="stAppViewContainer"] div {
+        color: #1B2430 !important;
+    }
+
+    h1, h2, h3 {
+        color: #1B2430 !important;
+        font-family: 'Sora', sans-serif !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.01em;
+    }
+
+    [data-testid="stSidebar"] { background-color: #1B2430 !important; }
+    [data-testid="stSidebar"] * { color: #F4F1EA !important; }
+    [data-testid="stSidebar"] code {
+        color: #7EDCCE !important;
+        background-color: rgba(255,255,255,0.08) !important;
+    }
+
+    input, textarea, select,
+    .stTextInput input, .stNumberInput input, .stDateInput input,
+    .stTextArea textarea {
+        background-color: #FFFFFF !important;
+        color: #1B2430 !important;
+        border: 1px solid rgba(27, 36, 48, 0.15) !important;
+        border-radius: 10px !important;
+    }
+    input::placeholder, textarea::placeholder { color: rgba(27, 36, 48, 0.4) !important; }
+    [data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+        color: #1B2430 !important;
+        border-radius: 10px !important;
+    }
+    [data-baseweb="popover"] * { color: #1B2430 !important; }
+    ul[data-testid="stSelectboxVirtualDropdown"] { background-color: #FFFFFF !important; }
 
     .advocate-card {
-        background-color: #FFFFFF;
+        background-color: #FFFFFF !important;
         border-radius: 16px;
         padding: 20px 24px;
         box-shadow: 0 2px 12px rgba(27, 36, 48, 0.06);
         margin-bottom: 16px;
         border: 1px solid rgba(27, 36, 48, 0.05);
     }
+    .advocate-card * { color: #1B2430 !important; }
 
     .quote-card {
-        background-color: rgba(42, 157, 143, 0.08);
+        background-color: rgba(42, 157, 143, 0.10) !important;
         border-left: 3px solid #2A9D8F;
         border-radius: 12px;
         padding: 14px 18px;
         margin-top: 10px;
         font-style: italic;
-        color: #1B2430;
     }
+    .quote-card * { color: #1B2430 !important; }
 
     .quote-label {
         font-size: 0.75rem;
         font-weight: 600;
-        color: #2A9D8F;
+        color: #2A9D8F !important;
         text-transform: uppercase;
         letter-spacing: 0.06em;
         font-style: normal;
@@ -114,8 +176,8 @@ st.markdown(
 
     .status-approved {
         display: inline-block;
-        background-color: rgba(107, 144, 128, 0.15);
-        color: #4A6D5C;
+        background-color: rgba(107, 144, 128, 0.15) !important;
+        color: #4A6D5C !important;
         padding: 4px 12px;
         border-radius: 999px;
         font-weight: 600;
@@ -124,25 +186,39 @@ st.markdown(
 
     .status-flagged {
         display: inline-block;
-        background-color: rgba(232, 163, 61, 0.18);
-        color: #92651A;
+        background-color: rgba(232, 163, 61, 0.18) !important;
+        color: #92651A !important;
         padding: 4px 12px;
         border-radius: 999px;
         font-weight: 600;
         font-size: 0.85rem;
     }
 
-    .amount-mono { font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+    .amount-mono { font-family: 'JetBrains Mono', monospace !important; font-weight: 500; }
+
+    .trust-score-card {
+        background: linear-gradient(135deg, #2A9D8F 0%, #23857A 100%) !important;
+        border-radius: 20px;
+        padding: 28px;
+        text-align: center;
+        margin-bottom: 16px;
+    }
+    .trust-score-card * { color: #FFFFFF !important; }
+    .trust-score-number { font-family: 'Sora', sans-serif !important; font-size: 3.2rem; font-weight: 700; line-height: 1; }
+    .trust-score-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.85; margin-top: 4px; }
 
     .stButton>button {
-        background-color: #2A9D8F;
-        color: white;
-        border-radius: 10px;
-        border: none;
-        padding: 0.5rem 1.2rem;
-        font-weight: 600;
+        background-color: #2A9D8F !important;
+        color: #FFFFFF !important;
+        border-radius: 10px !important;
+        border: none !important;
+        padding: 0.5rem 1.2rem !important;
+        font-weight: 600 !important;
     }
-    .stButton>button:hover { background-color: #23857A; color: white; }
+    .stButton>button:hover { background-color: #23857A !important; }
+    .stButton>button * { color: #FFFFFF !important; }
+
+    .stRadio label { color: #1B2430 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -256,8 +332,79 @@ else:
 
     # ---------- Expense list ----------
     if st.session_state.expenses:
-        st.markdown("### This trip's expenses")
         total = sum(e["amount"] for e in st.session_state.expenses)
+        trust_score = compute_trust_score(st.session_state.expenses)
+
+        # ---- Trust Score + spend donut ----
+        score_col, chart_col = st.columns([1, 1.4])
+        with score_col:
+            st.markdown(
+                f"""
+                <div class="trust-score-card">
+                    <div class="trust-score-number">{trust_score}</div>
+                    <div class="trust-score-label">Trip Trust Score</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("Starts at 100. Flagged expenses lower it proportional to how far over policy they were — not a pass/fail, a gradient.")
+
+        with chart_col:
+            cat_totals = {}
+            for e in st.session_state.expenses:
+                cat_totals[e["category"]] = cat_totals.get(e["category"], 0) + e["amount"]
+            fig_pie = px.pie(
+                names=list(cat_totals.keys()),
+                values=list(cat_totals.values()),
+                hole=0.55,
+                color_discrete_sequence=["#2A9D8F", "#E8A33D", "#6B9080", "#D96C5F"],
+            )
+            fig_pie.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#1B2430"),
+                height=220,
+            )
+            st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+
+        # ---- Budget utilization per category ----
+        st.markdown("#### Budget Utilization by Category")
+        per_category_spend = {}
+        for e in st.session_state.expenses:
+            per_category_spend[e["category"]] = per_category_spend.get(e["category"], 0) + e["amount"]
+        budget_rows = [
+            {"category": cat.title(), "spend": per_category_spend.get(cat, 0), "limit": limit}
+            for cat, limit in DEFAULT_POLICY.items()
+        ]
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            x=[r["category"] for r in budget_rows],
+            y=[r["spend"] for r in budget_rows],
+            name="Spent",
+            marker_color="#2A9D8F",
+        ))
+        fig_bar.add_trace(go.Scatter(
+            x=[r["category"] for r in budget_rows],
+            y=[r["limit"] for r in budget_rows],
+            name="Policy Limit",
+            mode="markers",
+            marker=dict(color="#D96C5F", size=12, symbol="line-ew", line=dict(width=3, color="#D96C5F")),
+        ))
+        fig_bar.update_layout(
+            margin=dict(t=10, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter", color="#1B2430"),
+            height=260,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            yaxis=dict(gridcolor="rgba(27,36,48,0.08)"),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+
+        # ---- Expense cards ----
+        st.markdown("### This trip's expenses")
         st.markdown(f"**Total spend:** <span class='amount-mono'>${total:,.2f}</span>", unsafe_allow_html=True)
 
         for e in st.session_state.expenses:
@@ -273,19 +420,29 @@ else:
             )
             if e["decision"] == "flagged":
                 st.caption(f"${e['over_by']:.2f} over the ${e['limit']:.2f} policy limit")
-                weather = get_weather_context(
-                    trip.get("destination", ""), str(date.today())
-                )
-                if weather["available"] and weather["summary"] != "Weather was unremarkable that day.":
-                    st.caption(f"🌦 {weather['summary']}")
-                if e["category"] == "transport" and e.get("context"):
-                    fare = check_fare_reasonableness("origin", "destination", e["amount"])
-                    if fare["available"]:
-                        st.caption(f"🚗 Fare check: {fare['verdict']}")
                 st.markdown('<div class="quote-card">', unsafe_allow_html=True)
                 st.markdown('<div class="quote-label">In your own words</div>', unsafe_allow_html=True)
                 st.write(e["justification"])
                 st.markdown("</div>", unsafe_allow_html=True)
+
+                if e["category"] == "transport":
+                    with st.expander("Check if this fare was reasonable"):
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            origin = st.text_input("Pickup location", key=f"origin_{e['title']}_{e['amount']}")
+                        with col_b:
+                            dest = st.text_input("Drop-off location", key=f"dest_{e['title']}_{e['amount']}")
+                        if st.button("Check fare", key=f"fare_{e['title']}_{e['amount']}"):
+                            if origin and dest:
+                                with st.spinner("Looking up the route..."):
+                                    fare_result = check_fare_reasonableness(origin, dest, e["amount"])
+                                if not fare_result["available"]:
+                                    st.caption(fare_result["message"])
+                                else:
+                                    st.write(fare_result["verdict"])
+                            else:
+                                st.caption("Enter both locations first.")
+
             st.markdown("</div>", unsafe_allow_html=True)
 
         # ---------- Audit trail table ----------
@@ -302,7 +459,10 @@ else:
                 + (f"flagged — {e['justification']}" if e["decision"] == "flagged" else "approved, no issues")
                 for e in st.session_state.expenses
             ]
-            with st.spinner("Putting together your recap..."):
+            with st.spinner("Checking trip conditions and putting together your recap..."):
+                weather = get_weather_context(trip["destination"], trip["end"])
+                if weather["available"] and weather["summary"]:
+                    summaries.append(f"- Trip conditions: {weather['summary']}")
                 st.session_state.debrief = generate_debrief(trip["name"], total, summaries)
 
         if st.session_state.debrief:
